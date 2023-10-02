@@ -1,35 +1,55 @@
+
+import * as admin from "firebase-admin";
+admin.initializeApp() 
+
 import {
-    onDocumentWritten,
-} from "firebase-functions/v2/firestore";
-import {messaging, firestore} from "firebase-admin";
+    firestore,
+    logger
+} from "firebase-functions";
 
-import {getGlicoseStatus} from "./glicoseParameters";
+import { UserProfileDbType } from "./@types/db/userProfile";
+import { getGlicoseStatus } from "./glicoseParameters";
 
+exports['send-glicose-notification'] = firestore.document('userProfiles/{docId}').onUpdate(async (event) => {
+    const userBefore = event.before.data() as UserProfileDbType;
+    const userAfter = event.after.data() as UserProfileDbType;
 
-onDocumentWritten("glicoseEntry/{docId}", async (event) => {
-    const entry = event.data?.after.data();
-    const user = entry?.user;
-
-    if (!entry?.glicose ||
-        !(getGlicoseStatus(entry.glicose) === "crit-high" ||
-        getGlicoseStatus(entry.glicose) === "crit-low")) {
+    if(!userAfter?.lastGlicoseEntry?.glicose) {
+        logger.log("[send-glicose-notification] No 'lastGlicoseEntry' on current user.");
         return;
     }
 
-    const adms = await firestore().collection("userProfiles")
+    if(getGlicoseStatus(userAfter.lastGlicoseEntry.glicose) !== "crit-high" &&
+        getGlicoseStatus(userAfter.lastGlicoseEntry.glicose) !== "crit-low") {
+        logger.log("[send-glicose-notification] Current user glicose not critical.");
+        return;
+    }
+
+    if(userBefore?.lastGlicoseEntry?.glicose && (getGlicoseStatus(userBefore.lastGlicoseEntry.glicose) === "crit-high" || 
+        getGlicoseStatus(userBefore.lastGlicoseEntry.glicose) === "crit-low")) {
+        logger.log("[send-glicose-notification] Previous user glicose not critical or not set.");
+        return;
+    }
+
+    const adms = await admin.firestore().collection("userProfiles")
         .where("isAdm", "==", true).orderBy("fcmToken").get();
 
     const tokens: string[] = [];
     adms.forEach((item) => tokens.push(item.data().fcmToken));
 
-    if (user && tokens.length) {
-        await messaging().sendEachForMulticast({
-            tokens,
-            notification: {
-                title: "Paciente em estado crítico",
-                body: `${user.name} está com a glicose de ${entry.glicose}.`,
-            },
-        });
+    if (!tokens.length) {
+        logger.log("[send-glicose-notification] Not manager tokens registered.");
+        return;
     }
+
+    await admin.messaging().sendEachForMulticast({
+        tokens,
+        notification: {
+            title: "Paciente em estado crítico",
+            body: `${userAfter?.name ? userAfter.name : 'Seu paciente'} está com a glicose de ${userAfter.lastGlicoseEntry.glicose}.`,
+        },
+        data: {
+            user: JSON.stringify(userAfter)
+        }
+    });
 });
-  
