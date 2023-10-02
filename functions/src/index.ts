@@ -10,7 +10,7 @@ import {
 import { UserProfileDbType } from "./@types/db/userProfile";
 import { getGlicoseStatus } from "./glicoseParameters";
 
-exports['send-glicose-notification'] = firestore.document('userProfiles/{docId}').onUpdate(async (event) => {
+exports.sendglicosenotification = firestore.document('userProfiles/{docId}').onUpdate(async (event) => {
     const userBefore = event.before.data() as UserProfileDbType;
     const userAfter = event.after.data() as UserProfileDbType;
 
@@ -35,7 +35,11 @@ exports['send-glicose-notification'] = firestore.document('userProfiles/{docId}'
         .where("isAdm", "==", true).orderBy("fcmToken").get();
 
     const tokens: string[] = [];
-    adms.forEach((item) => tokens.push(item.data().fcmToken));
+    adms.forEach((item) => {
+        if(tokens.find(token => item.data().fcmToken === token)) return;
+
+        tokens.push(item.data().fcmToken);
+    });
 
     if (!tokens.length) {
         logger.log("[send-glicose-notification] Not manager tokens registered.");
